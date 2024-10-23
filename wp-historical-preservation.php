@@ -3,8 +3,8 @@
 /**
  * Plugin Name: Historical Preservation Mode
  * Plugin URI: 
- * Description: Locks down a WordPress site for historical preservation, preventing any content modifications.
- * Version: 1.0.3
+ * Description: Disables saving functionality across WordPress admin for historical preservation.
+ * Version: 1.0.0
  * Author: 
  * License: GPL v2 or later
  */
@@ -13,7 +13,7 @@ if (!defined('ABSPATH')) {
   exit;
 }
 
-// Simple settings page
+// Settings page
 add_action('admin_menu', function () {
   add_options_page(
     'Historical Preservation',
@@ -43,7 +43,7 @@ add_action('admin_menu', function () {
               <label>
                 <input type="checkbox" name="historical_preservation_enabled"
                   <?php checked($is_enabled); ?>>
-                Lock website in current state
+                Disable saving functionality across the site
               </label>
             </td>
           </tr>
@@ -51,56 +51,103 @@ add_action('admin_menu', function () {
         <?php submit_button('Save Changes', 'primary', 'historical_preservation_submit'); ?>
       </form>
     </div>
-<?php
+  <?php
     }
   );
 });
 
 // Only add protection if enabled
 if (get_option('historical_preservation_enabled', false)) {
-  // Block access to admin pages except settings
-  add_action('admin_init', function () {
-    if (!is_admin()) {
+  // Add notice
+  add_action('admin_notices', function () {
+    echo '<div class="notice notice-warning">
+            <p><strong>Historical Preservation Mode is active.</strong> Saving functionality is disabled. 
+            <a href="' . admin_url('options-general.php?page=historical-preservation') . '">Manage Settings</a></p>
+        </div>';
+  });
+
+  // Add JS to disable buttons and forms
+  add_action('admin_footer', function () {
+    if (isset($_GET['page']) && $_GET['page'] === 'historical-preservation') {
       return;
     }
+  ?>
+    <script>
+      document.addEventListener('DOMContentLoaded', function() {
+        // Disable all submit buttons except in our settings
+        const buttons = document.querySelectorAll('input[type="submit"], button[type="submit"], .button-primary, .button');
+        buttons.forEach(function(button) {
+          if (!button.closest('.wp-core-ui')) {
+            button.disabled = true;
+            button.classList.add('disabled');
+          }
+        });
 
-    // Allow access to the plugin's settings page
+        // Disable form submissions
+        const forms = document.querySelectorAll('form');
+        forms.forEach(function(form) {
+          if (!form.closest('.wp-core-ui')) {
+            form.onsubmit = function(e) {
+              e.preventDefault();
+              alert('Site is in historical preservation mode. Saving is disabled.');
+              return false;
+            };
+          }
+        });
+
+        // Disable quick edit links
+        const quickEditLinks = document.querySelectorAll('.editinline');
+        quickEditLinks.forEach(function(link) {
+          link.style.display = 'none';
+        });
+
+        // Disable TinyMCE if it exists
+        if (typeof tinyMCE !== 'undefined') {
+          tinyMCE.editors.forEach(function(editor) {
+            editor.setMode('readonly');
+          });
+        }
+
+        // Add disabled attribute to common inputs
+        const inputs = document.querySelectorAll('input[type="text"], textarea, select');
+        inputs.forEach(function(input) {
+          if (!input.closest('.wp-core-ui')) {
+            input.readOnly = true;
+          }
+        });
+
+        // Style disabled elements
+        const style = document.createElement('style');
+        style.textContent = `
+                button:disabled,
+                input:disabled,
+                .button.disabled {
+                    opacity: 0.6 !important;
+                    cursor: not-allowed !important;
+                }
+                .readonly {
+                    background-color: #f0f0f1 !important;
+                }
+            `;
+        document.head.appendChild(style);
+      });
+    </script>
+<?php
+  });
+
+  // Prevent form submissions server-side as backup
+  add_action('admin_init', function () {
     if (isset($_GET['page']) && $_GET['page'] === 'historical-preservation') {
       return;
     }
 
-    // Allow access to admin home and profile
-    global $pagenow;
-    $allowed_pages = array('index.php', 'profile.php', 'admin.php');
-    if (in_array($pagenow, $allowed_pages)) {
-      return;
-    }
-
-    // Show notice on allowed pages
-    add_action('admin_notices', function () {
-      echo '<div class="notice notice-warning">
-                <p><strong>Historical Preservation Mode is active.</strong> Content modifications are disabled. 
-                <a href="' . admin_url('options-general.php?page=historical-preservation') . '">Manage Settings</a></p>
-            </div>';
-    });
-
-    // Block access to all other admin pages
-    if (!isset($_GET['page']) || $_GET['page'] !== 'historical-preservation') {
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       wp_die(
-        'Access Denied - Site is in historical preservation mode.',
-        'Access Denied',
+        'Saving is disabled - Site is in historical preservation mode.',
+        'Action Blocked',
         array('response' => 403, 'back_link' => true)
       );
     }
-  }, 1);
-
-  // Disable REST API modifications
-  add_filter('rest_authentication_errors', function ($errors) {
-    return new WP_Error(
-      'rest_forbidden',
-      'Site is in historical preservation mode.',
-      array('status' => 403)
-    );
   });
 }
 
