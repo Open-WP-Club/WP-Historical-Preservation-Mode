@@ -4,7 +4,7 @@
  * Plugin Name: Historical Preservation Mode
  * Plugin URI: 
  * Description: Locks down a WordPress site for historical preservation, preventing any content modifications.
- * Version: 1.0.0
+ * Version: 1.0.1
  * Author: 
  * License: GPL v2 or later
  */
@@ -17,6 +17,7 @@ if (!defined('ABSPATH')) {
 class Historical_Preservation_Mode
 {
   private static $instance = null;
+  private $is_preservation_enabled = false;
 
   public static function get_instance()
   {
@@ -28,22 +29,67 @@ class Historical_Preservation_Mode
 
   private function __construct()
   {
-    // Add admin menu
+    // Load option only once
+    $this->is_preservation_enabled = get_option('historical_preservation_enabled', false);
+
+    // Core admin functionality
     add_action('admin_menu', array($this, 'add_admin_menu'));
+    add_action('admin_init', array($this, 'init_preservation_mode'));
 
-    // If preservation mode is enabled, hook all necessary functions
-    if (get_option('historical_preservation_enabled', false)) {
-      $this->enable_preservation_mode();
-    }
-
-    // Add activation hook
+    // Register activation hook
     register_activation_hook(__FILE__, array($this, 'activate_plugin'));
   }
 
   public function activate_plugin()
   {
-    // Initialize plugin settings
     add_option('historical_preservation_enabled', false);
+  }
+
+  public function init_preservation_mode()
+  {
+    if (!$this->is_preservation_enabled) {
+      return;
+    }
+
+    // Add only necessary hooks based on current context
+    if (is_admin()) {
+      add_action('admin_notices', array($this, 'show_preservation_notice'));
+
+      // Prevent post/page modifications only when editing
+      if ($this->is_edit_action()) {
+        add_filter('wp_insert_post_data', array($this, 'prevent_content_changes'), 999);
+        add_action('pre_delete_post', array($this, 'prevent_content_changes'), 10);
+      }
+
+      // Prevent uploads only when in media section
+      if ($this->is_media_action()) {
+        add_filter('upload_mimes', array($this, 'prevent_changes'));
+        add_filter('wp_handle_upload', array($this, 'prevent_changes'));
+      }
+
+      // Prevent plugin/theme changes only when in respective sections
+      if ($this->is_plugin_theme_action()) {
+        add_filter('map_meta_cap', array($this, 'prevent_plugin_theme_changes'), 10, 2);
+      }
+    }
+  }
+
+  private function is_edit_action()
+  {
+    global $pagenow;
+    return in_array($pagenow, array('post.php', 'post-new.php', 'edit.php'));
+  }
+
+  private function is_media_action()
+  {
+    global $pagenow;
+    return in_array($pagenow, array('upload.php', 'media-new.php'));
+  }
+
+  private function is_plugin_theme_action()
+  {
+    global $pagenow;
+    return in_array($pagenow, array('plugins.php', 'themes.php', 'theme-install.php', 'plugin-install.php'));
   }
 
   public function add_admin_menu()
@@ -59,19 +105,12 @@ class Historical_Preservation_Mode
 
   public function render_admin_page()
   {
-    // Handle form submission
-    if (isset($_POST['historical_preservation_submit'])) {
-      if (check_admin_referer('historical_preservation_nonce')) {
-        $enabled = isset($_POST['historical_preservation_enabled']) ? true : false;
-        update_option('historical_preservation_enabled', $enabled);
-
-        // Reload page to apply changes
-        wp_redirect(admin_url('options-general.php?page=historical-preservation'));
-        exit;
-      }
+    if (isset($_POST['historical_preservation_submit']) && check_admin_referer('historical_preservation_nonce')) {
+      $this->is_preservation_enabled = isset($_POST['historical_preservation_enabled']);
+      update_option('historical_preservation_enabled', $this->is_preservation_enabled);
+      echo '<div class="notice notice-success"><p>Settings saved.</p></div>';
     }
 
-    $enabled = get_option('historical_preservation_enabled', false);
 ?>
     <div class="wrap">
       <h1>Historical Preservation Mode</h1>
@@ -83,7 +122,7 @@ class Historical_Preservation_Mode
             <td>
               <label>
                 <input type="checkbox" name="historical_preservation_enabled"
-                  <?php checked($enabled); ?>>
+                  <?php checked($this->is_preservation_enabled); ?>>
                 Lock website in current state
               </label>
               <p class="description">
@@ -98,110 +137,38 @@ class Historical_Preservation_Mode
 <?php
   }
 
-  private function enable_preservation_mode()
+  public function prevent_content_changes()
   {
-    // Prevent post/page modifications
-    add_filter('wp_insert_post_data', array($this, 'prevent_post_changes'), 999, 2);
-    add_action('pre_delete_post', array($this, 'prevent_post_deletion'), 10, 2);
-
-    // Prevent media uploads and modifications
-    add_filter('upload_mimes', array($this, 'prevent_uploads'));
-    add_filter('wp_handle_upload', array($this, 'prevent_uploads_handler'));
-
-    // Prevent widget changes
-    add_filter('sidebars_widgets', array($this, 'prevent_widget_changes'), 999);
-
-    // Prevent menu changes
-    add_filter('wp_update_nav_menu', array($this, 'prevent_menu_changes'), 999);
-
-    // Prevent theme and plugin changes
-    add_filter('map_meta_cap', array($this, 'prevent_theme_plugin_changes'), 10, 4);
-
-    // Prevent settings changes
-    add_filter('pre_update_option', array($this, 'prevent_settings_changes'), 999, 3);
-
-    // Add admin notice
-    add_action('admin_notices', array($this, 'show_preservation_notice'));
-  }
-
-  // Prevention methods
-  public function prevent_post_changes($data, $postarr)
-  {
-    if (!$this->is_preservation_exempt()) {
+    if (!$this->is_super_admin_override()) {
       wp_die('Site is in historical preservation mode. Content modifications are disabled.');
     }
-    return $data;
   }
 
-  public function prevent_post_deletion($post_id, $post)
+  public function prevent_changes($input)
   {
-    if (!$this->is_preservation_exempt()) {
-      wp_die('Site is in historical preservation mode. Content deletion is disabled.');
+    if (!$this->is_super_admin_override()) {
+      wp_die('Site is in historical preservation mode. Modifications are disabled.');
     }
+    return $input;
   }
 
-  public function prevent_uploads($mimes)
+  public function prevent_plugin_theme_changes($caps, $cap)
   {
-    if (!$this->is_preservation_exempt()) {
-      return array();
-    }
-    return $mimes;
-  }
-
-  public function prevent_uploads_handler($file)
-  {
-    if (!$this->is_preservation_exempt()) {
-      wp_die('Site is in historical preservation mode. File uploads are disabled.');
-    }
-    return $file;
-  }
-
-  public function prevent_widget_changes($sidebars_widgets)
-  {
-    if (!$this->is_preservation_exempt()) {
-      return get_option('sidebars_widgets');
-    }
-    return $sidebars_widgets;
-  }
-
-  public function prevent_menu_changes($menu_id)
-  {
-    if (!$this->is_preservation_exempt()) {
-      wp_die('Site is in historical preservation mode. Menu modifications are disabled.');
-    }
-    return $menu_id;
-  }
-
-  public function prevent_theme_plugin_changes($caps, $cap, $user_id, $args)
-  {
-    if (!$this->is_preservation_exempt()) {
+    if (!$this->is_super_admin_override()) {
       $restricted_caps = array(
         'install_themes',
         'update_themes',
         'delete_themes',
         'install_plugins',
         'update_plugins',
-        'delete_plugins',
-        'edit_plugins',
-        'edit_themes'
+        'delete_plugins'
       );
 
       if (in_array($cap, $restricted_caps)) {
-        $caps[] = 'do_not_allow';
+        return array('do_not_allow');
       }
     }
     return $caps;
-  }
-
-  public function prevent_settings_changes($value, $option, $old_value)
-  {
-    if (!$this->is_preservation_exempt()) {
-      // Allow the preservation mode setting itself to be changed
-      if ($option !== 'historical_preservation_enabled') {
-        return $old_value;
-      }
-    }
-    return $value;
   }
 
   public function show_preservation_notice()
@@ -211,9 +178,8 @@ class Historical_Preservation_Mode
         </div>';
   }
 
-  private function is_preservation_exempt()
+  private function is_super_admin_override()
   {
-    // Allow super admins to bypass restrictions if needed
     return current_user_can('manage_options') &&
       isset($_GET['preservation_override']) &&
       $_GET['preservation_override'] === wp_create_nonce('preservation_override');
@@ -221,4 +187,4 @@ class Historical_Preservation_Mode
 }
 
 // Initialize the plugin
-Historical_Preservation_Mode::get_instance();
+add_action('plugins_loaded', array('Historical_Preservation_Mode', 'get_instance'));
