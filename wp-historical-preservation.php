@@ -1,12 +1,16 @@
 <?php
 
 /**
- * Plugin Name: Historical Preservation Mode
- * Plugin URI: 
- * Description: Disables saving functionality across WordPress admin for historical preservation.
- * Version: 1.0.0
- * Author: 
- * License: GPL v2 or later
+ * Plugin Name:             Historical Preservation Mode
+ * Plugin URI:              https://github.com/Open-WP-Club/wp-historical-preservation-mode/
+ * Description:             Disables saving functionality across WordPress admin for historical preservation.
+ * Version:                 1.0.0
+ * Author:                  Open WP Club
+ * Author URI:              https://openwpclub.com
+ * License:                 GPL-2.0 License
+ * Requires at least:       6.0
+ * Requires PHP:            7.4
+ * Tested up to:            6.6.2
  */
 
 if (!defined('ABSPATH')) {
